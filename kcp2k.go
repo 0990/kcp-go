@@ -12,8 +12,8 @@ func (s *UDPSession) ReadPacket() (packet []byte, err error) {
 	var timeout *time.Timer
 	// deadline for current reading operation
 	var c <-chan time.Time
-	if !s.rd.IsZero() {
-		delay := time.Until(s.rd)
+	if trd, ok := s.rd.Load().(time.Time); ok && !trd.IsZero() {
+		delay := time.Until(trd)
 		timeout = time.NewTimer(delay)
 		c = timeout.C
 		defer timeout.Stop()
