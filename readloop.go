@@ -29,6 +29,10 @@ import (
 	"github.com/pkg/errors"
 )
 
+type dynamicRemoteProvider interface {
+	CurrentRemoteAddr() net.Addr
+}
+
 func sameUDPAddr(a, b *net.UDPAddr) bool {
 	if a == nil || b == nil {
 		return false
@@ -45,13 +49,19 @@ func (s *UDPSession) defaultReadLoop() {
 
 	var src *net.UDPAddr
 	var srcStr string
-	if s.remote != nil {
-		if udp, ok := s.remote.(*net.UDPAddr); ok {
+	resetSource := func(addr net.Addr) {
+		src = nil
+		srcStr = ""
+		if addr == nil {
+			return
+		}
+		if udp, ok := addr.(*net.UDPAddr); ok {
 			src = udp
 		} else {
-			srcStr = s.remote.String()
+			srcStr = addr.String()
 		}
 	}
+	resetSource(s.remote)
 	for {
 		n, addr, err := s.conn.ReadFrom(buf)
 		if err != nil {
@@ -61,6 +71,10 @@ func (s *UDPSession) defaultReadLoop() {
 
 		if s.isClosed() {
 			return
+		}
+
+		if provider, ok := s.conn.(dynamicRemoteProvider); ok {
+			resetSource(provider.CurrentRemoteAddr())
 		}
 
 		// make sure the packet is from the same source
