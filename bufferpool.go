@@ -1,6 +1,6 @@
 // The MIT License (MIT)
 //
-// Copyright (c) 2015 xtaci
+// # Copyright (c) 2015 xtaci
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -20,43 +20,46 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//go:build linux
-
 package kcp
 
 import (
-	"sync/atomic"
-
-	"github.com/pkg/errors"
-	"golang.org/x/net/ipv4"
+	"errors"
+	"sync"
 )
 
-// tx is the optimized transmit path for Linux, utilizing the sendmmsg syscall
-// to batch-send multiple UDP packets in a single system call.
-func (s *UDPSession) tx(txqueue []ipv4.Message) {
-	// default version
-	if s.platform.batchConn == nil {
-		s.defaultTx(txqueue)
-		return
+// pre-allocated error to avoid repeated allocations
+var errBufferSizeMismatch = errors.New("buffer size mismatch")
+
+// A system-wide packet buffer shared among sending, receiving and FEC
+// to mitigate high-frequency memory allocation of packets.
+var defaultBufferPool = newBufferPool(mtuLimit)
+
+type bufferPool struct {
+	xmitBuf sync.Pool
+}
+
+// newBufferPool creates a new buffer pool with buffers of the given size.
+func newBufferPool(size int) *bufferPool {
+	return &bufferPool{
+		xmitBuf: sync.Pool{
+			New: func() any {
+				return make([]byte, size)
+			},
+		},
 	}
+}
 
-	// x/net version
-	nbytes := 0
-	npkts := 0
-	for len(txqueue) > 0 {
-		n, err := s.platform.batchConn.WriteBatch(txqueue, 0)
-		if err != nil {
-			s.notifyWriteError(errors.WithStack(err))
-			break
-		}
+// Get retrieves a buffer from the pool.
+func (bp *bufferPool) Get() []byte {
+	return bp.xmitBuf.Get().([]byte)
+}
 
-		for k := range txqueue[:n] {
-			nbytes += len(txqueue[k].Buffers[0])
-		}
-		npkts += n
-		txqueue = txqueue[n:]
+// Put returns a buffer to the pool.
+func (bp *bufferPool) Put(buf []byte) error {
+	// Only put back buffers of the correct size.
+	if cap(buf) != mtuLimit {
+		return errBufferSizeMismatch
 	}
-
-	atomic.AddUint64(&DefaultSnmp.OutPkts, uint64(npkts))
-	atomic.AddUint64(&DefaultSnmp.OutBytes, uint64(nbytes))
+	bp.xmitBuf.Put(buf[:cap(buf)]) // reset slice length to full capacity
+	return nil
 }
